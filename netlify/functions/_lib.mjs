@@ -15,6 +15,10 @@ export function toNum(x) {
   return Number.isFinite(n) ? n : null;
 }
 
+function normCcy(x) {
+  return String(x ?? "").trim().toUpperCase();
+}
+
 export async function httpGetJson(url, headers = {}) {
   const res = await fetch(url, { headers });
   const text = await res.text();
@@ -86,15 +90,26 @@ export async function fetchOkxBorrowRates() {
   const url = "https://www.okx.com/api/v5/public/interest-rate-loan-quota";
   const json = await httpGetJson(url);
   const rows = Array.isArray(json?.data) ? json.data : [];
-  // Normalize to APR%
-  // OKX sometimes returns percent values (e.g. "8.1") or decimals (e.g. "0.081")
-  return rows.map(r => {
-    const ccy = r.ccy || r.currency;
+
+  // Normalize to APR% (annual)
+  // OKX field often = DAILY rate (decimal or percent). We convert to DAILY % then *365.
+  const out = [];
+  for (const r of rows) {
+    const ccy = normCcy(r.ccy || r.currency);
     const ir = r.interestRate ?? r.ir ?? r.rate;
-    let borrow = toNum(ir);
-    if (borrow !== null && borrow > 0 && borrow < 1) borrow = borrow * 100;
-    return { ccy, borrowAprPct: borrow };
-  }).filter(x => x.ccy && x.borrowAprPct !== null);
+    let daily = toNum(ir);
+    if (!ccy || daily === null) continue;
+
+    // heuristic: if 0 < daily < 1 => decimal (e.g. 0.000057) OR percent-decimal (0.081)
+    // Convert to DAILY percent:
+    if (daily > 0 && daily < 1) daily = daily * 100;
+
+    const borrowAprPct = daily * 365; // annual APR %
+    if (!Number.isFinite(borrowAprPct) || borrowAprPct <= 0) continue;
+
+    out.push({ ccy, borrowAprPct });
+  }
+  return out;
 }
 
 function okxSign({ method, path, body }) {
@@ -135,31 +150,57 @@ export async function fetchOkxMaxLoan(borrowCcy) {
 export async function fetchGateUniCurrencies() {
   const url = "https://api.gateio.ws/api/v4/earn/uni/currencies";
   const rows = await httpGetJson(url);
+
   // Gate returns DAILY rate as strings: max_rate / min_rate
   // Convert to APR%: daily * 365 * 100
-  return (Array.isArray(rows) ? rows : []).map(r => {
-    const ccy = r.currency;
+  const out = [];
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const ccy = normCcy(r.currency || r.ccy);
     const maxRate = toNum(r.max_rate);
     const minRate = toNum(r.min_rate);
-    const daily = (maxRate ?? minRate);
-    const earnAprPct = daily !== null ? daily * 365 * 100 : null;
-    return { ccy, earnAprPct, dailyRate: daily };
-  }).filter(x => x.ccy && x.earnAprPct !== null);
+
+    const daily = (maxRate !== null && maxRate > 0) ? maxRate
+               : ((minRate !== null && minRate > 0) ? minRate : null);
+
+    if (!ccy || daily === null) continue;
+
+    const earnAprPct = daily * 365 * 100; // annual APR %
+    if (!Number.isFinite(earnAprPct) || earnAprPct <= 0) continue;
+
+    out.push({ ccy, earnAprPct, dailyRate: daily });
+  }
+  return out;
 }
 
 // -------------------- Ranking --------------------
 export function calcOpportunities({ okxBorrowRates, gateEarnRates, maxLoanMap, allowlist, topN }) {
-  const okxMap = new Map(okxBorrowRates.map(x => [x.ccy.toUpperCase(), x.borrowAprPct]));
-  const gateMap = new Map(gateEarnRates.map(x => [x.ccy.toUpperCase(), x.earnAprPct]));
+  const okxMap = new Map(
+    (okxBorrowRates || [])
+      .filter(x => x?.ccy)
+      .map(x => [normCcy(x.ccy), toNum(x.borrowAprPct)])
+      .filter(([, v]) => v !== null)
+  );
 
+  const gateMap = new Map(
+    (gateEarnRates || [])
+      .filter(x => x?.ccy)
+      .map(x => [normCcy(x.ccy), toNum(x.earnAprPct)])
+      .filter(([, v]) => v !== null)
+  );
+
+  // intersection Gate ∩ OKX (biar spread valid)
   const coins = [...gateMap.keys()].filter(c => okxMap.has(c));
+
   const rows = [];
   for (const coin of coins) {
     if (allowlist && allowlist.size && !allowlist.has(coin)) continue;
+
     const okxBorrowApr = okxMap.get(coin);
     const gateEarnApr = gateMap.get(coin);
     if (okxBorrowApr === null || gateEarnApr === null) continue;
+
     const spread = gateEarnApr - okxBorrowApr;
+
     rows.push({
       coin,
       okxBorrowApr,
@@ -170,6 +211,8 @@ export function calcOpportunities({ okxBorrowRates, gateEarnRates, maxLoanMap, a
       note: ""
     });
   }
+
   rows.sort((a,b) => (b.spread ?? -1e9) - (a.spread ?? -1e9));
   return rows.slice(0, topN || 20);
 }
+
