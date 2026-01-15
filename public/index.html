@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Top 20 Arbitrase: Borrow OKX vs Earn Gate.io</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:20px;}
+    h1{margin:0 0 8px 0;}
+    .sub{color:#444;margin:0 0 14px 0;}
+    input,button{padding:8px 10px;font-size:14px;}
+    table{border-collapse:collapse;width:100%;margin-top:12px;}
+    th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px;}
+    th{background:#f6f6f6;}
+    .muted{color:#666;font-size:12px;}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+  </style>
+</head>
+<body>
+  <h1>Top 20 Arbitrase: Borrow OKX vs Earn Gate.io</h1>
+  <p class="sub">Spread = APR Gate (lend/earn) − APR OKX (borrow). Data update otomatis dari function.</p>
+  <div class="row">
+    <input id="filter" placeholder="Filter coin (contoh: USDT / BTC / ETH)"/>
+    <button id="refresh">Refresh</button>
+    <label class="muted"><input type="checkbox" id="withMaxLoan"/> include OKX max loan (lebih lambat)</label>
+    <span class="muted" id="updated"></span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Coin</th>
+        <th>OKX Borrow APR %</th>
+        <th>Gate Earn APR %</th>
+        <th>Spread %</th>
+        <th>OKX Max Loan (optional)</th>
+        <th>OKX Remaining Quota (optional)</th>
+        <th>Catatan</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+<script>
+async function load() {
+  const q = new URLSearchParams();
+  if (document.getElementById("withMaxLoan").checked) q.set("withMaxLoan","1");
+  const res = await fetch("/.netlify/functions/api?"+q.toString(), {cache:"no-store"});
+  const json = await res.json();
+  document.getElementById("updated").textContent = "Updated: " + (json.asOf || "-");
+  const filter = (document.getElementById("filter").value || "").trim().toUpperCase();
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = "";
+  const data = Array.isArray(json.data) ? json.data : [];
+  const filtered = filter ? data.filter(r => (r.coin||"").includes(filter)) : data;
+  filtered.forEach((r, idx) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${idx+1}</td>
+      <td>${r.coin||""}</td>
+      <td>${fmt(r.okxBorrowApr)}</td>
+      <td>${fmt(r.gateEarnApr)}</td>
+      <td>${fmt(r.spread)}</td>
+      <td>${r.okxMaxLoan ?? ""}</td>
+      <td>${r.okxRemainingQuota ?? ""}</td>
+      <td class="muted">${r.note||""}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+function fmt(x){
+  if (x===null || x===undefined || Number.isNaN(Number(x))) return "";
+  return Number(x).toFixed(4);
+}
+document.getElementById("refresh").addEventListener("click", load);
+document.getElementById("filter").addEventListener("input", () => { clearTimeout(window.__t); window.__t=setTimeout(load, 250);});
+document.getElementById("withMaxLoan").addEventListener("change", load);
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "okx-gate-earn-arbitrage",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {}
+}
